@@ -41,15 +41,13 @@ public class RedisSampler extends AbstractSampler {
         try {
             sampleResult.sampleStart();
             try (JedisCluster jedisCluster = createJedisCluster(server, password)) {
-                String response;
                 if ("SET".equals(operation)) {
                     sampleResult.setSamplerData(String.format("Key: %s\nValue: %s", key, value));
-                    response = setTypeValue(jedisCluster, type, key, value, expired);
+                    setTypeValue(jedisCluster, type, key, value, expired, result);
                 } else {
                     sampleResult.setSamplerData(String.format("Key: %s", key));
-                    response = getTypeValue(jedisCluster, type, key);
+                    getTypeValue(jedisCluster, type, key, result);
                 }
-                result.put("result", response);
             }
             sampleResult.setResponseOK();
         } catch (Exception e) {
@@ -85,8 +83,8 @@ public class RedisSampler extends AbstractSampler {
         return new JedisCluster(nodes, 2000, 2000, 5, password, new GenericObjectPoolConfig());
     }
 
-    private String setTypeValue(JedisCluster jedisCluster, String type, String key, String value, String expired) {
-        String response = "";
+    private void setTypeValue(JedisCluster jedisCluster, String type, String key, String value, String expired, JSONObject result) {
+        Object response = null;
         int seconds = Integer.parseInt(expired);
         switch (type) {
             case "String":
@@ -96,48 +94,44 @@ public class RedisSampler extends AbstractSampler {
                 JSONObject jsonObject = JSONObject.parseObject(value);
                 Map<String, String> hash = new HashMap<>();
                 jsonObject.keySet().forEach(k -> hash.put(k, jsonObject.getString(k)));
-                response = jedisCluster.hset(key, hash).toString();
+                response = jedisCluster.hset(key, hash);
                 break;
             case "List":
                 for (String item : value.split(",")) {
-                    response = jedisCluster.rpush(key, item.trim()).toString();
+                    response = jedisCluster.rpush(key, item.trim());
                 }
                 break;
             case "Set":
                 for (String item : value.split(",")) {
-                    response = jedisCluster.sadd(key, item.trim()).toString();
+                    response = jedisCluster.sadd(key, item.trim());
                 }
                 break;
         }
+        result.put("result", response);
         if (!expired.isEmpty()) {
-            response = jedisCluster.expire(key, seconds).toString();
+            Long expire = jedisCluster.expire(key, seconds);
+            result.put("expire", expire);
         }
-        return response;
     }
 
-    private String getTypeValue(JedisCluster jedisCluster, String type, String key) {
-        String response = "";
+    private void getTypeValue(JedisCluster jedisCluster, String type, String key, JSONObject result) {
+        Object response = null;
         switch (type) {
             case "String":
                 response = jedisCluster.get(key);
                 break;
             case "Hash":
-                Map<String, String> hash = jedisCluster.hgetAll(key);
-                if (null != hash) {
-                    response = JSONObject.toJSONString(hash);
-                }
+                response = jedisCluster.hgetAll(key);
                 break;
             case "List":
                 Long len = jedisCluster.llen(key);
-                List<String> list = jedisCluster.lrange(key, 0, len);
-                response = String.join(",", list);
+                response = jedisCluster.lrange(key, 0, len);
                 break;
             case "Set":
-                Set<String> set = jedisCluster.smembers(key);
-                response = String.join(",", set);
+                response = jedisCluster.smembers(key);
                 break;
         }
-        return null == response ? "" : response;
+        result.put("result", response);
     }
 
     @Override
